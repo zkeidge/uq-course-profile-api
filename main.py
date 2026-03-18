@@ -9,6 +9,7 @@ app = FastAPI(title="UQ Course Profile Extractor")
 
 class CourseRequest(BaseModel):
     course_url: HttpUrl
+    section: str
 
 
 def clean_text(text: str) -> str:
@@ -93,9 +94,20 @@ def extract_section_by_anchor_or_heading(soup: BeautifulSoup, anchor_id: str, he
 @app.post("/get-uq-course-profile")
 def get_uq_course_profile(request: CourseRequest):
     url = base_course_url(str(request.course_url))
+    section = request.section
 
     if "course-profiles.uq.edu.au/course-profiles/" not in url:
         raise HTTPException(status_code=400, detail="Invalid UQ course profile URL")
+
+    valid_sections = {
+        "course_overview": ("course-overview", ["course overview"]),
+        "aim_and_outcomes": ("aim-and-outcomes", ["aim and outcomes", "aim & outcomes", "learning outcomes"]),
+        "assessment": ("assessment", ["assessment"]),
+        "learning_activities": ("learning-activities", ["learning activities"]),
+    }
+
+    if section not in valid_sections:
+        raise HTTPException(status_code=400, detail="Invalid section")
 
     try:
         html = fetch_html(url)
@@ -107,57 +119,24 @@ def get_uq_course_profile(request: CourseRequest):
     course_title = extract_title(soup)
     course_code = extract_course_code(url, course_title)
 
-    course_overview = extract_section_by_anchor_or_heading(
+    anchor_id, heading_patterns = valid_sections[section]
+    content = extract_section_by_anchor_or_heading(
         soup,
-        anchor_id="course-overview",
-        heading_patterns=["course overview"]
+        anchor_id=anchor_id,
+        heading_patterns=heading_patterns
     )
 
-    aim_and_outcomes = extract_section_by_anchor_or_heading(
-        soup,
-        anchor_id="aim-and-outcomes",
-        heading_patterns=["aim and outcomes", "aim & outcomes", "learning outcomes"]
-    )
+    if not content:
+        content = "Not found on course profile"
 
-    assessment = extract_section_by_anchor_or_heading(
-        soup,
-        anchor_id="assessment",
-        heading_patterns=["assessment"]
-    )
-
-    learning_activities = extract_section_by_anchor_or_heading(
-        soup,
-        anchor_id="learning-activities",
-        heading_patterns=["learning activities"]
-    )
-
-    missing_sections = []
-    if not course_overview:
-        missing_sections.append("course_overview")
-        course_overview = "Not found on course profile"
-    if not aim_and_outcomes:
-        missing_sections.append("aim_and_outcomes")
-        aim_and_outcomes = "Not found on course profile"
-    if not assessment:
-        missing_sections.append("assessment")
-        assessment = "Not found on course profile"
-    if not learning_activities:
-        missing_sections.append("learning_activities")
-        learning_activities = "Not found on course profile"
+    # Optional safety limit
+    content = content[:12000]
 
     return {
         "course_url": url,
         "course_code": course_code or "Not found on course profile",
         "course_title": course_title or "Not found on course profile",
-        "sections": {
-            "course_overview": course_overview,
-            "aim_and_outcomes": aim_and_outcomes,
-            "assessment": assessment,
-            "learning_activities": learning_activities,
-        },
-        "missing_sections": missing_sections,
-        "source_note": (
-            "Content retrieved from the supplied UQ course profile URL. "
-            "Some section selectors may require adjustment if UQ changes page structure."
-        )
+        "section": section,
+        "content": content,
+        "source_note": "Content retrieved from the supplied UQ course profile URL."
     }
